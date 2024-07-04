@@ -42,7 +42,7 @@ estacion_dict = {
 # Reemplazar los valores en la columna 'EstacionID'
 df_final['EstacionID'] = df_final['EstacionID'].replace(estacion_dict)
 
-# Convertir 'fecha' a datetime y establecerlo como índice si es necesario
+# Convertir 'fecha' a datetime
 df_final['fecha'] = pd.to_datetime(df_final['fecha'])
 
 def imputar_promedio_estaciones_cercanas(df, tabla_distancias, columna, umbral_nulos=0.5):
@@ -86,9 +86,11 @@ def imputar_vecinos_cercanos(df, columnas_a_imputar):
 def imputar_con_interpolacion_temporal(df, columna):
     df_copia = df.copy()
 
+    # Asegurarse de que 'fecha' sea de tipo datetime antes de establecer el índice
     if not pd.api.types.is_datetime64_any_dtype(df_copia['fecha']):
         df_copia['fecha'] = pd.to_datetime(df_copia['fecha'])
 
+    # Establecer 'fecha' como índice y realizar la interpolación temporal
     df_copia.set_index('fecha', inplace=True)
     df_copia[columna] = df_copia.groupby('EstacionID')[columna].apply(lambda group: group.interpolate(method='time'))
     df_copia.reset_index(inplace=True)
@@ -110,8 +112,9 @@ def imputar_datos(df, tabla_distancias, columnas_modificar, umbral_nulos=0.5):
                 if df_estacion[columna].isnull().sum() > 0:
                     df_estacion = imputar_con_interpolacion_temporal(df_estacion, columna)
 
+        # Asignar los valores imputados asegurando la consistencia de los índices
         df_estacion = imputar_vecinos_cercanos(df_estacion, columnas_modificar)
-        df_copia.loc[df_copia['EstacionID'] == estacion_id, columnas_modificar] = df_estacion[columnas_modificar]
+        df_copia.loc[df_copia['EstacionID'] == estacion_id, columnas_modificar] = df_estacion[columnas_modificar].values
 
     return df_copia
 
