@@ -3,8 +3,9 @@ import numpy as np
 from datetime import datetime
 import yaml
 import os
-from sklearn.impute import KNNImputer
 import warnings
+from sklearn.impute import KNNImputer
+
 warnings.filterwarnings("ignore")
 
 # Ruta del directorio actual y de salida
@@ -16,7 +17,7 @@ ruta_yaml = os.path.join(directorio_actual, 'data.yaml')
 with open(ruta_yaml, 'r') as f:
     parametros = yaml.load(f, Loader=yaml.FullLoader)
 
-# Cargar datos de distancia y limpiar columnas 
+# Cargar datos de distancia y limpiar columnas
 archivo_distancias = "distancias_vecinos.txt"
 ruta_distancias = os.path.join(directorio_out, archivo_distancias)
 distancias = pd.read_csv(ruta_distancias, sep=';')
@@ -27,6 +28,12 @@ distancias['estaciones_cercanas'] = distancias['estaciones_cercanas'].str.replac
 archivo_df = 'base_fechas_completas.txt'
 ruta_df = os.path.join(directorio_out, archivo_df)
 df_final = pd.read_csv(ruta_df, sep=',')
+
+# Seleccionar solo las columnas necesarias
+columnas_necesarias = ['fecha', 'EstacionID', 'temperatura', 'radiacion', 'humedad_relativa', 
+                       'precipitacion', 'velocidad_viento', 'mojadura', 'direccion_viento',
+                       'estacion', 'Finca', 'cluster']
+df_final = df_final[columnas_necesarias]
 
 # Diccionario para mapear nombres de estaciones a IDs
 estacion_dict = {
@@ -76,52 +83,34 @@ def imputar_promedio_estaciones_cercanas(df, tabla_distancias, columna, umbral_n
 
     return df_copia
 
-def imputar_vecinos_cercanos(df, columnas_a_imputar):
-    imputer = KNNImputer(n_neighbors=5)
-    df_copy = df[columnas_a_imputar].copy()
-    df_imputed = imputer.fit_transform(df_copy)
-    df[columnas_a_imputar] = df_imputed
-    return df
+def knn_impute(df, n_neighbors=5):
+    imputer = KNNImputer(n_neighbors=n_neighbors)
+    df_imputed = pd.DataFrame(imputer.fit_transform(df), columns=df.columns)
+    return df_imputed
 
-def imputar_con_interpolacion_temporal(df, columna):
-    df_copia = df.copy()
+def preprocess_and_impute(df, distancias, climatic_columns, knn_imputer_k, umbral_nulos=0.5):
+    result_df = df.copy()
 
-    # Asegurarse de que 'fecha' sea de tipo datetime antes de establecer el índice
-    if not pd.api.types.is_datetime64_any_dtype(df_copia['fecha']):
-        df_copia['fecha'] = pd.to_datetime(df_copia['fecha'])
+    # Imputar usando el promedio de estaciones cercanas cuando los nulos superen el umbral
+    for columna in climatic_columns:
+        result_df = imputar_promedio_estaciones_cercanas(result_df, distancias, columna, umbral_nulos)
 
-    # Establecer 'fecha' como índice y realizar la interpolación temporal
-    df_copia.set_index('fecha', inplace=True)
-    df_copia[columna] = df_copia.groupby('EstacionID')[columna].apply(lambda group: group.interpolate(method='time'))
-    df_copia.reset_index(inplace=True)
+    # Imputar usando KNN para los valores que aún falten
+    result_df[climatic_columns] = knn_impute(result_df[climatic_columns], n_neighbors=knn_imputer_k)
 
-    return df_copia
+    return result_df
 
-def imputar_datos(df, tabla_distancias, columnas_modificar, umbral_nulos=0.5):
-    df_copia = df.copy()
+# Configuración de parámetros
+knn_imputer_k = 5
 
-    for estacion_id in df_copia['EstacionID'].unique():
-        df_estacion = df_copia[df_copia['EstacionID'] == estacion_id]
+# Convertir columnas a tipo numérico si es necesario
+columnas_numericas = ['temperatura', 'radiacion', 'humedad_relativa', 'precipitacion', 
+                      'velocidad_viento', 'mojadura', 'direccion_viento']
+for columna in columnas_numericas:
+    df_final[columna] = pd.to_numeric(df_final[columna], errors='coerce')
 
-        for columna in columnas_modificar:
-            nulos_por_columna = df_estacion[columna].isnull().sum()
-
-            if nulos_por_columna > 0:
-                df_estacion = imputar_promedio_estaciones_cercanas(df_estacion, tabla_distancias, columna, umbral_nulos)
-
-                if df_estacion[columna].isnull().sum() > 0:
-                    df_estacion = imputar_con_interpolacion_temporal(df_estacion, columna)
-
-        # Asignar los valores imputados asegurando la consistencia de los índices
-        df_estacion = imputar_vecinos_cercanos(df_estacion, columnas_modificar)
-        df_copia.loc[df_copia['EstacionID'] == estacion_id, columnas_modificar] = df_estacion[columnas_modificar].values
-
-    return df_copia
-
-columnas_climaticas = ['temperatura', 'radiacion', 'humedad_relativa', 'precipitacion', 'velocidad_viento', 'mojadura', 'direccion_viento']
-df_imputado = imputar_datos(df_final, distancias, columnas_climaticas, umbral_nulos=0.5)
-
-print(df_imputado.head())
+# Realizar la imputación
+df_imputado = preprocess_and_impute(df_final, distancias, columnas_numericas, knn_imputer_k, umbral_nulos=0.5)
 
 # Guardar el DataFrame imputado en un archivo txt
 ruta_relativa_guardar = parametros['01-filtro']['base_final']
